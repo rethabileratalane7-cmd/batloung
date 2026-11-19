@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Vendors & Debtors | Batloung Farm</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="js/tw-config.js"></script>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md">
+<main class="w-full pt-28"><div id="app" class="p-margin md:p-gutter-desktop flex flex-col gap-space-xl"></div></main>
+<script src="js/app.js"></script>
+<script>
+let vendors = [], balances = [];
+
+async function load() {
+  const q = $('#search') ? $('#search').value.trim() : '';
+  try {
+    const [v, b] = await Promise.all([api('GET', '/vendors' + (q ? `?search=${encodeURIComponent(q)}` : '')), api('GET', '/vendors/balances')]);
+    vendors = v.data; balances = b.data;
+  } catch (e) { toast(e.message, 'err'); return; }
+  render();
+}
+
+function render() {
+  const bal = (id) => balances.find((b) => b.vendor_id === id) || {};
+  const mapLocation = (record) => record.latitude != null && record.longitude != null
+    ? `<a class="text-secondary underline whitespace-nowrap" href="${mapsLink(record.latitude, record.longitude)}" target="_blank" rel="noopener" aria-label="Open exact Google Maps pin for ${esc(record.vendor_name)}">${esc(record.location || 'Pinned location')} · Open exact pin</a>`
+    : `<span>${esc(record.location || 'Location not provided')} <span class="chip chip-part">NO MAP PIN</span></span>`;
+  $('#venRows').innerHTML = vendors.length ? vendors.map((v) => {
+    const b = bal(v.vendor_id), out = b.outstanding_balance || 0;
+    return `<tr><td>${v.vendor_id}</td><td class="font-semibold"><a href="#" class="underline decoration-secondary underline-offset-2" onclick="vendorDetails(${v.vendor_id});return false">${esc(v.vendor_name)}</a></td><td>${esc(v.phone_number)}</td><td>${mapLocation(v)}</td><td>${esc(v.registration_date)}</td>
+      <td class="num">${money(b.total_billed)}</td><td class="num ${out > 0 ? 'text-error font-bold' : ''}">${money(out)}</td>
+      <td class="num whitespace-nowrap"><button class="btn btn-alt" onclick="vendorDetails(${v.vendor_id})">Details &amp; map</button> <button class="btn btn-ghost" onclick="vendorModal(${v.vendor_id})">Edit</button> <button class="btn ${out > 0 ? 'btn-alt' : 'btn-ghost'}" onclick="payModal(${v.vendor_id})" ${out > 0 ? '' : 'disabled'}>Pay</button></td></tr>`;
+  }).join('') : emptyRow(8);
+  const debtors = balances.filter((b) => b.outstanding_balance > 0);
+  $('#debtRows').innerHTML = debtors.length ? debtors.map((b) => `<tr><td>${esc(b.vendor_name)}</td><td>${mapLocation(b)}</td><td class="num">${num(b.sales_count)}</td><td class="num">${money(b.total_billed)}</td><td class="num">${money(b.total_paid)}</td><td class="num text-error font-bold">${money(b.outstanding_balance)}</td></tr>`).join('') : emptyRow(6, 'No outstanding balances');
+  $('#debtTotal').textContent = money(debtors.reduce((t, b) => t + b.outstanding_balance, 0));
+}
+
+function vendorModal(id) {
+  const v = vendors.find((x) => x.vendor_id === id) || {};
+  const m = openModal(`<h2 class="font-headline-md text-headline-md mb-space-md">${id ? 'Edit vendor' : 'Register vendor'}</h2>
+  <form id="vf" class="flex flex-col gap-space-md">
+    <div><label class="lbl">Vendor name</label><input class="field" name="vendor_name" value="${esc(v.vendor_name || '')}" required></div>
+    <div><label class="lbl">Phone number</label><input class="field" name="phone_number" value="${esc(v.phone_number || '')}" required></div>
+    <div><label class="lbl">Location description</label><input class="field" name="location" value="${esc(v.location || '')}" required><p class="text-body-sm text-on-surface-variant mt-space-xs">The saved map pin is the exact location. Use Google Maps coordinates or a Google Maps URL below to match it precisely.</p></div>
+    ${pickerHtml(v.latitude, v.longitude)}
+    <div class="flex gap-space-sm justify-end"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
+  m.querySelector('.modal').style.maxWidth = '40rem';
+  mountPicker(m, v.latitude, v.longitude, [-29.31, 27.48, 12]);
+  $('#vf', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    if (!d.latitude || !d.longitude) return toast('Please pin the vendor location on the map.', 'err');
+    if (await attempt(() => (id ? api('PUT', `/vendors/${id}`, d) : api('POST', '/vendors', d)), id ? 'Vendor updated' : 'Vendor registered')) { m.remove(); load(); }
+  });
+}
+
+async function vendorDetails(id) {
+  const r = await attempt(() => api('GET', `/vendors/${id}`));
+  if (!r || r === true) return;
+  const v = r.data;
+  const m = openModal(`<div class="flex justify-between items-start gap-space-md">
+      <div><div class="lbl">Vendor #${v.vendor_id}</div><h2 class="font-headline-md text-headline-md">${esc(v.vendor_name)}</h2></div>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Close</button></div>
+    ${detailGrid([
+      ['Phone number', esc(v.phone_number)], ['Registered', esc(v.registration_date)],
+      ['Location description', esc(v.location)], ['Exact map pin', v.latitude != null ? `${v.latitude}, ${v.longitude}` : 'Not pinned'],
+      ['Sales made', num(v.sales_count)], ['Total billed', money(v.total_billed)],
+      ['Total paid', money(v.total_paid)], ['Outstanding balance', `<b class="${v.outstanding_balance > 0 ? 'text-error' : ''}">${money(v.outstanding_balance)}</b>`],
+    ])}
+    <div class="flex items-center justify-between mb-space-xs"><span class="lbl !mb-0">Saved pin preview (OpenStreetMap)</span>
+      ${v.latitude != null ? `<a class="font-mono-label-sm text-mono-label-sm underline text-secondary" target="_blank" rel="noopener" href="${mapsLink(v.latitude, v.longitude)}">OPEN IN GOOGLE MAPS</a>` : ''}</div>
+    <div id="viewMap" style="height:280px" class="bg-surface-container"></div>
+    <div class="lbl mt-space-md">Unpaid sales</div>
+    <table class="tbl"><thead><tr><th>Sale</th><th>Date</th><th>Status</th><th class="num">Owing</th></tr></thead><tbody>${v.unpaid_sales.length ? v.unpaid_sales.map((x) => `<tr><td>#${x.sale_id}</td><td>${esc(x.sale_date)}</td><td>${STATUS_CHIP[x.payment_status]}</td><td class="num">${money(x.outstanding)}</td></tr>`).join('') : emptyRow(4, 'Nothing owing')}</tbody></table>`);
+  m.querySelector('.modal').style.maxWidth = '44rem';
+  mountView($('#viewMap', m), v.latitude, v.longitude, v.vendor_name);
+}
+
+async function payModal(id) {
+  const r = await attempt(() => api('GET', `/vendors/${id}/balance`));
+  if (!r || r === true) return;
+  const b = r.data;
+  const m = openModal(`<h2 class="font-headline-md text-headline-md">Receive payment</h2>
+    <div class="text-on-surface-variant mb-space-md">${esc(b.vendor_name)} · outstanding <b class="text-error">${money(b.outstanding_balance)}</b></div>
+    <table class="tbl mb-space-md"><thead><tr><th>Sale</th><th>Status</th><th class="num">Owing</th></tr></thead><tbody>${b.unpaid_sales.map((s) => `<tr><td>#${s.sale_id}</td><td>${STATUS_CHIP[s.payment_status]}</td><td class="num">${money(s.outstanding)}</td></tr>`).join('')}</tbody></table>
+    <form id="payf" class="flex flex-col gap-space-md">
+      <div class="grid grid-cols-2 gap-space-md">
+        <div><label class="lbl">Amount (M)</label><input class="field" type="number" step="0.01" min="0.01" max="${b.outstanding_balance}" name="amount" value="${b.outstanding_balance}" required></div>
+        <div><label class="lbl">Method</label><select class="field" name="method"><option value="CASH">Cash</option><option value="MOBILE_MONEY">Mobile money</option></select></div></div>
+      <div><label class="lbl">Reference (optional)</label><input class="field" name="reference" maxlength="60"></div>
+      <p class="text-body-sm text-on-surface-variant">The payment settles this vendor's oldest unpaid sales first.</p>
+      <div class="flex gap-space-sm justify-end"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="btn" type="submit">Record payment</button></div></form>`);
+  $('#payf', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (await attempt(() => api('POST', `/vendors/${id}/payments`, formData(e.target)), 'Payment recorded')) { m.remove(); load(); }
+  });
+}
+
+boot('vendors.html', 'SEC-E // DEBTORS', () => {
+  $('#app').innerHTML = pageHeader('[VENDOR LEDGER // CREDIT CONTROL]', 'Vendors & Debtors',
+    'Register vendors, search by name or phone, and track what each one still owes. Payments can be cash or mobile money.',
+    '<button class="btn btn-alt" onclick="vendorModal()">+ Register vendor</button>') +
+    `<section class="panel p-space-lg overflow-x-auto">${sectionTitle('Vendors')}
+      <div class="mb-space-md max-w-md"><label class="lbl">Search by name or phone</label><input id="search" class="field" placeholder="e.g. Thabo or +266"></div>
+      <table class="tbl"><thead><tr><th>ID</th><th>Name</th><th>Phone</th><th>Location / exact Google Maps pin</th><th>Registered</th><th class="num">Billed</th><th class="num">Outstanding</th><th></th></tr></thead><tbody id="venRows"></tbody></table></section>
+    <section class="panel p-space-lg overflow-x-auto">${sectionTitle('Debtors // outstanding balance per vendor')}
+      <table class="tbl"><thead><tr><th>Vendor</th><th>Location / exact Google Maps pin</th><th class="num">Sales</th><th class="num">Billed</th><th class="num">Paid</th><th class="num">Outstanding</th></tr></thead><tbody id="debtRows"></tbody></table>
+      <div class="text-right mt-space-md"><span class="lbl">Total outstanding</span><div id="debtTotal" class="font-mono-data-lg text-mono-data-lg text-error"></div></div></section>`;
+  let t; $('#search').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 250); });
+  load();
+});
+</script>
+</body></html>

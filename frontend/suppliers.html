@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Suppliers & Purchases | Batloung Farm</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="js/tw-config.js"></script>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md">
+<main class="w-full pt-28"><div id="app" class="p-margin md:p-gutter-desktop flex flex-col gap-space-xl"></div></main>
+<script src="js/app.js"></script>
+<script>
+const PROVINCES = ['Gauteng', 'Free State', 'KwaZulu-Natal', 'Western Cape', 'Eastern Cape', 'Limpopo', 'Mpumalanga', 'North West'];
+let suppliers = [], purchases = [], fruits = [];
+
+async function load() {
+  try {
+    const [s, p, f] = await Promise.all([api('GET', '/suppliers'), api('GET', '/purchases'), api('GET', '/fruits?status=ACTIVE')]);
+    suppliers = s.data; purchases = p.data; fruits = f.data;
+  } catch (e) { toast(e.message, 'err'); return; }
+  render();
+}
+
+function render() {
+  $('#supRows').innerHTML = suppliers.length ? suppliers.map((s) => `<tr><td>${s.supplier_id}</td><td class="font-semibold"><a href="#" class="underline decoration-secondary underline-offset-2" onclick="supplierDetails(${s.supplier_id});return false">${esc(s.business_name)}</a></td><td>${esc(s.contact_person)}</td><td>${esc(s.phone)}</td><td>${esc(s.province)}</td>
+    <td class="num whitespace-nowrap"><button class="btn btn-alt" onclick="supplierDetails(${s.supplier_id})">Details &amp; map</button> <button class="btn btn-ghost" onclick="supplierModal(${s.supplier_id})">Edit</button> <button class="btn btn-ghost" onclick="delSupplier(${s.supplier_id})">Delete</button></td></tr>`).join('') : emptyRow(6);
+  $('#purRows').innerHTML = purchases.length ? purchases.map((p) => `<tr><td>#${p.purchase_id}</td><td>${esc(p.purchase_date)}</td><td>${esc(p.business_name)} <span class="text-on-surface-variant">(${esc(p.province)})</span></td><td class="num">${num(p.total_boxes)}</td><td class="num">${money(p.total_amount)}</td>
+    <td class="num"><button class="btn btn-ghost" onclick="viewPurchase(${p.purchase_id})">View</button></td></tr>`).join('') : emptyRow(6);
+}
+
+function supplierModal(id) {
+  const s = suppliers.find((x) => x.supplier_id === id) || {};
+  const m = openModal(`<h2 class="font-headline-md text-headline-md mb-space-md">${id ? 'Edit supplier' : 'Add supplier'}</h2>
+  <form id="sf" class="flex flex-col gap-space-md">
+    <div><label class="lbl">Business name</label><input class="field" name="business_name" value="${esc(s.business_name || '')}" required></div>
+    <div><label class="lbl">Contact person</label><input class="field" name="contact_person" value="${esc(s.contact_person || '')}" required></div>
+    <div><label class="lbl">Phone</label><input class="field" name="phone" value="${esc(s.phone || '')}" required></div>
+    <div><label class="lbl">Province</label><select class="field" name="province">${PROVINCES.map((p) => `<option ${p === s.province ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
+    <div><label class="lbl">Address</label><input class="field" name="address" value="${esc(s.address || '')}" required></div>
+    ${pickerHtml(s.latitude, s.longitude)}
+    <div class="flex gap-space-sm justify-end"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
+  m.querySelector('.modal').style.maxWidth = '40rem';
+  mountPicker(m, s.latitude, s.longitude, [-28.5, 25.0, 5]);
+  $('#sf', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    if (!d.latitude || !d.longitude) return toast('Please pin the supplier location on the map.', 'err');
+    const ok = await attempt(() => (id ? api('PUT', `/suppliers/${id}`, d) : api('POST', '/suppliers', d)), id ? 'Supplier updated' : 'Supplier added');
+    if (ok) { m.remove(); load(); }
+  });
+}
+
+async function supplierDetails(id) {
+  const r = await attempt(() => api('GET', `/suppliers/${id}`));
+  if (!r || r === true) return;
+  const s = r.data;
+  const recent = purchases.filter((p) => p.supplier_id === id).slice(0, 5);
+  const m = openModal(`<div class="flex justify-between items-start gap-space-md">
+      <div><div class="lbl">Supplier #${s.supplier_id}</div><h2 class="font-headline-md text-headline-md">${esc(s.business_name)}</h2></div>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Close</button></div>
+    ${detailGrid([
+      ['Contact person', esc(s.contact_person)], ['Phone', esc(s.phone)],
+      ['Province', esc(s.province)], ['Address', esc(s.address)],
+      ['Purchases made', num(s.purchase_count)], ['Total purchased', money(s.total_purchased)],
+      ['Last purchase', esc(s.last_purchase_date || 'None yet')],
+      ['Pinned location', s.latitude != null ? `${s.latitude}, ${s.longitude}` : 'Not pinned'],
+    ])}
+    <div class="flex items-center justify-between mb-space-xs"><span class="lbl !mb-0">Live map (location pinned at registration)</span>
+      ${s.latitude != null ? `<a class="font-mono-label-sm text-mono-label-sm underline text-secondary" target="_blank" rel="noopener" href="${mapsLink(s.latitude, s.longitude)}">OPEN IN GOOGLE MAPS</a>` : ''}</div>
+    <div id="viewMap" style="height:280px" class="bg-surface-container"></div>
+    <div class="lbl mt-space-md">Recent purchases</div>
+    <table class="tbl"><thead><tr><th>Ref</th><th>Date</th><th class="num">Boxes</th><th class="num">Total</th></tr></thead><tbody>${recent.length ? recent.map((p) => `<tr><td>#${p.purchase_id}</td><td>${esc(p.purchase_date)}</td><td class="num">${num(p.total_boxes)}</td><td class="num">${money(p.total_amount)}</td></tr>`).join('') : emptyRow(4)}</tbody></table>`);
+  m.querySelector('.modal').style.maxWidth = '44rem';
+  mountView($('#viewMap', m), s.latitude, s.longitude, s.business_name);
+}
+
+async function delSupplier(id) {
+  if (!confirm('Delete this supplier?')) return;
+  if (await attempt(() => api('DELETE', `/suppliers/${id}`), 'Supplier deleted')) load();
+}
+
+async function viewPurchase(id) {
+  const r = await attempt(() => api('GET', `/purchases/${id}`));
+  if (!r || r === true) return;
+  const p = r.data;
+  openModal(`<h2 class="font-headline-md text-headline-md">Purchase #${p.purchase_id}</h2>
+    <div class="text-on-surface-variant mb-space-md">${esc(p.business_name)} · ${esc(p.purchase_date)}</div>
+    <table class="tbl"><thead><tr><th>Fruit</th><th>Size</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr></thead><tbody>
+    ${p.items.map((i) => `<tr><td>${esc(i.fruit_name)}</td><td>${SIZE_LABEL[i.packaging_size]}</td><td class="num">${num(i.quantity)}</td><td class="num">${money(i.unit_cost)}</td><td class="num">${money(i.line_total)}</td></tr>`).join('')}
+    </tbody></table><div class="text-right font-mono-data-lg text-mono-data-lg mt-space-md">Total ${money(p.total_amount)}</div>
+    <div class="text-right mt-space-md"><button class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Close</button></div>`);
+}
+
+function itemRow() {
+  return `<div class="item grid grid-cols-12 gap-space-xs items-end">
+    <div class="col-span-4"><label class="lbl">Fruit</label><select class="field" data-k="fruit_id">${fruits.map((f) => `<option value="${f.fruit_id}">${esc(f.fruit_name)}</option>`).join('')}</select></div>
+    <div class="col-span-3"><label class="lbl">Size</label><select class="field" data-k="packaging_size"><option value="SMALL">Small</option><option value="MEDIUM">Medium</option><option value="LARGE">Large</option></select></div>
+    <div class="col-span-2"><label class="lbl">Qty</label><input class="field" type="number" min="1" step="1" data-k="quantity" value="1"></div>
+    <div class="col-span-2"><label class="lbl">Unit cost</label><input class="field" type="number" min="0" step="0.01" data-k="unit_cost" value="0"></div>
+    <button type="button" class="btn btn-ghost col-span-1" onclick="this.closest('.item').remove();calc()">✕</button></div>`;
+}
+
+function calc() {
+  let t = 0;
+  document.querySelectorAll('#pItems .item').forEach((r) => {
+    t += Number($('[data-k=quantity]', r).value || 0) * Number($('[data-k=unit_cost]', r).value || 0);
+  });
+  const el = $('#pTotal'); if (el) el.textContent = money(t);
+}
+
+function purchaseModal() {
+  if (!suppliers.length) return toast('Add a supplier first', 'err');
+  const m = openModal(`<h2 class="font-headline-md text-headline-md mb-space-md">Record purchase</h2>
+  <form id="pf" class="flex flex-col gap-space-md">
+    <div class="grid grid-cols-2 gap-space-md">
+      <div><label class="lbl">Supplier</label><select class="field" name="supplier_id">${suppliers.map((s) => `<option value="${s.supplier_id}">${esc(s.business_name)} (${esc(s.province)})</option>`).join('')}</select></div>
+      <div><label class="lbl">Date</label><input class="field" type="date" name="purchase_date" value="${new Date().toISOString().slice(0, 10)}"></div></div>
+    <div id="pItems" class="flex flex-col gap-space-sm" oninput="calc()">${itemRow()}</div>
+    <button type="button" class="btn btn-ghost self-start" id="addItem">+ Add line</button>
+    <div class="flex items-center justify-between"><div><div class="lbl">Total (calculated)</div><div class="font-mono-data-lg text-mono-data-lg" id="pTotal">M 0.00</div></div>
+    <div class="flex gap-space-sm"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="btn" type="submit">Save purchase</button></div></div></form>`);
+  m.querySelector('.modal').style.maxWidth = '46rem';
+  $('#addItem', m).addEventListener('click', () => { $('#pItems', m).insertAdjacentHTML('beforeend', itemRow()); });
+  $('#pf', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    d.items = [...m.querySelectorAll('.item')].map((r) => {
+      const o = {}; r.querySelectorAll('[data-k]').forEach((x) => { o[x.dataset.k] = x.value; }); return o;
+    });
+    if (await attempt(() => api('POST', '/purchases', d), 'Purchase recorded, stock increased')) { m.remove(); load(); }
+  });
+}
+
+boot('suppliers.html', 'SEC-C // SOURCING', () => {
+  $('#app').innerHTML = pageHeader('[SUPPLY CORRIDOR // 8 PROVINCES]', 'Suppliers & Purchases',
+    'Register suppliers across the eight provinces and record purchases. The total is calculated automatically and stock is increased for each fruit and box size.',
+    '<button class="btn btn-ghost" onclick="supplierModal()">+ Supplier</button><button class="btn btn-alt" onclick="purchaseModal()">+ Record purchase</button>') +
+    `<section class="panel p-space-lg overflow-x-auto">${sectionTitle('Suppliers')}<table class="tbl"><thead><tr><th>ID</th><th>Business</th><th>Contact</th><th>Phone</th><th>Province</th><th></th></tr></thead><tbody id="supRows"></tbody></table></section>
+    <section class="panel p-space-lg overflow-x-auto">${sectionTitle('Purchase history')}<table class="tbl"><thead><tr><th>Ref</th><th>Date</th><th>Supplier</th><th class="num">Boxes</th><th class="num">Total</th><th></th></tr></thead><tbody id="purRows"></tbody></table></section>`;
+  load();
+});
+</script>
+</body></html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Dashboard & Reports | Batloung Farm</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="js/tw-config.js"></script>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md">
+<main class="w-full pt-28"><div id="app" class="p-margin md:p-gutter-desktop flex flex-col gap-space-xl"></div></main>
+<script src="js/app.js"></script>
+<script>
+const today = new Date().toISOString().slice(0, 10);
+const monthStart = today.slice(0, 8) + '01';
+
+boot('index.html', 'SEC-A // DASHBOARD', async () => {
+  $('#app').innerHTML = pageHeader('[SYS.DASH // OVERVIEW]', 'Dashboard & Reports',
+    'Live totals plus the four management reports: top fruits, revenue by date range, top vendor and current stock levels.') +
+    `<div id="kpis" class="grid grid-cols-2 lg:grid-cols-4 gap-space-md"></div>
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-space-lg">
+      <section class="panel p-space-lg"><div id="r1"></div></section>
+      <section class="panel p-space-lg"><div id="r3"></div></section>
+      <section class="panel p-space-lg">
+        ${sectionTitle('Report 2 // Revenue between two dates')}
+        <form id="revForm" class="flex flex-wrap items-end gap-space-md mb-space-md">
+          <div><label class="lbl">From</label><input class="field" type="date" name="from" value="${monthStart}" required></div>
+          <div><label class="lbl">To</label><input class="field" type="date" name="to" value="${today}" required></div>
+          <button class="btn btn-alt" type="submit">Run report</button>
+        </form>
+        <div id="r2" class="font-mono-data-md text-mono-data-md text-on-surface-variant">Pick a range and press Run report.</div>
+      </section>
+      <section class="panel p-space-lg"><div id="r4"></div></section>
+    </div>`;
+
+  $('#revForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    const r = await attempt(() => api('GET', `/reports/revenue?from=${f.from}&to=${f.to}`));
+    if (r && r !== true) {
+      const d = r.data;
+      $('#r2').innerHTML = `<div class="grid grid-cols-2 gap-space-md">
+        <div class="bg-surface-container p-space-md"><div class="lbl">Total revenue</div><div class="font-mono-data-lg text-mono-data-lg text-on-surface">${money(d.total_revenue)}</div></div>
+        <div class="bg-surface-container p-space-md"><div class="lbl">Number of sales</div><div class="font-mono-data-lg text-mono-data-lg text-on-surface">${num(d.number_of_sales)}</div></div></div>
+        <div class="mt-space-sm text-body-sm">${esc(d.from)} to ${esc(d.to)} (inclusive)</div>`;
+    }
+  });
+
+  const [sum, top, vend, stock] = await Promise.all([
+    attempt(() => api('GET', '/reports/summary')),
+    attempt(() => api('GET', '/reports/top-fruits')),
+    attempt(() => api('GET', '/reports/top-vendor')),
+    attempt(() => api('GET', '/reports/stock-levels')),
+  ]);
+
+  if (sum && sum !== true) {
+    const k = sum.data;
+    const tiles = [
+      ['Total sales', money(k.total_sales)], ['Total purchases', money(k.total_purchases)],
+      ['Outstanding debt', money(k.total_outstanding)], ['Boxes in stock', num(k.boxes_in_stock)],
+      ['Suppliers', num(k.suppliers)], ['Vendors', num(k.vendors)],
+      ['Vendors owing', num(k.vendors_owing)], ['Low-stock lines', num(k.low_stock_lines)],
+    ];
+    $('#kpis').innerHTML = tiles.map(([l, v], i) => `<div class="panel p-space-md ${i === 2 || i === 7 ? 'border-l-4 border-secondary-container' : ''}"><div class="lbl">${l}</div><div class="font-mono-data-lg text-mono-data-lg">${v}</div></div>`).join('');
+  }
+
+  $('#r1').innerHTML = sectionTitle('Report 1 // Top 5 most frequently sold fruits') + `<table class="tbl"><thead><tr><th>#</th><th>Fruit</th><th class="num">Boxes sold</th><th class="num">Revenue</th></tr></thead><tbody>${
+    top && top !== true && top.data.length ? top.data.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.fruit_name)}</td><td class="num">${num(r.total_boxes_sold)}</td><td class="num">${money(r.revenue)}</td></tr>`).join('') : emptyRow(4)}</tbody></table>`;
+
+  $('#r3').innerHTML = sectionTitle('Report 3 // Vendor with the highest boxes purchased') + (vend && vend !== true && vend.data.top_vendor
+    ? `<div class="bg-primary text-on-primary p-space-md mb-space-md"><div class="font-mono-label-xs text-mono-label-xs text-primary-fixed-dim">TOP VENDOR</div><div class="font-headline-md text-headline-md">${esc(vend.data.top_vendor.vendor_name)}</div><div class="font-mono-data-md text-mono-data-md">${num(vend.data.top_vendor.total_boxes_purchased)} boxes</div></div>
+    <table class="tbl"><thead><tr><th>Rank</th><th>Vendor</th><th class="num">Boxes</th></tr></thead><tbody>${vend.data.ranking.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.vendor_name)}</td><td class="num">${num(r.total_boxes_purchased)}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="text-on-surface-variant">No sales yet</div>');
+
+  $('#r4').innerHTML = sectionTitle('Report 4 // Current stock levels') + `<table class="tbl"><thead><tr><th>Fruit</th><th>Size</th><th class="num">Available</th><th>Status</th></tr></thead><tbody>${
+    stock && stock !== true && stock.data.length ? stock.data.map((r) => `<tr><td>${esc(r.fruit_name)}</td><td>${SIZE_LABEL[r.packaging_size]}</td><td class="num">${num(r.available_quantity)}</td><td>${STOCK_CHIP[r.available_quantity === 0 ? 'NOT_AVAILABLE' : r.available_quantity <= 100 ? 'LOW_STOCK' : 'AVAILABLE']}</td></tr>`).join('') : emptyRow(4)}</tbody></table>`;
+});
+</script>
+</body></html>

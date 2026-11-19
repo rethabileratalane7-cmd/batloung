@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Fruits & Stock | Batloung Farm</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="js/tw-config.js"></script>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md">
+<main class="w-full pt-28"><div id="app" class="p-margin md:p-gutter-desktop flex flex-col gap-space-xl"></div></main>
+<script src="js/app.js"></script>
+<script>
+let fruits = [], stock = [], prices = [];
+
+async function load() {
+  const [f, s, p] = await Promise.all([api('GET', '/fruits'), api('GET', '/stock'), api('GET', '/stock/prices')]).catch((e) => { toast(e.message, 'err'); return []; });
+  if (!f) return;
+  fruits = f.data; stock = s.data; prices = p.data;
+  render();
+}
+
+function render() {
+  const bySize = (id, size) => (stock.find((r) => r.fruit_id === id && r.packaging_size === size) || {}).available_quantity ?? 0;
+  const cell = (q) => `<td class="num"><div class="font-semibold">${num(q)}</div>${q === 0 ? STOCK_CHIP.NOT_AVAILABLE : q <= 100 ? STOCK_CHIP.LOW_STOCK : STOCK_CHIP.AVAILABLE}</td>`;
+  $('#fruitRows').innerHTML = fruits.length ? fruits.map((f) => `<tr>
+      <td>${f.fruit_id}</td><td class="font-semibold">${esc(f.fruit_name)}</td><td>${esc(f.description || '')}</td>
+      <td>${f.category ? `<span class="chip chip-ok">${esc(f.category)}</span>` : '<span class="chip chip-part">UNCATEGORIZED</span>'}</td>
+      <td>${f.status === 'ACTIVE' ? '<span class="chip chip-paid">ACTIVE</span>' : '<span class="chip chip-ok">INACTIVE</span>'}</td>
+      ${['SMALL', 'MEDIUM', 'LARGE'].map((s) => cell(bySize(f.fruit_id, s))).join('')}
+      <td class="num"><button class="btn btn-ghost" onclick="editFruit(${f.fruit_id})">Edit</button></td></tr>`).join('') : emptyRow(9);
+  $('#priceBox').innerHTML = prices.map((p) => `<div class="bg-surface-container p-space-md flex flex-col gap-space-xs">
+      <div class="lbl">${SIZE_LABEL[p.packaging_size]} box selling price</div>
+      <div class="font-mono-data-lg text-mono-data-lg">${money(p.selling_price)}</div>
+      <button class="btn btn-ghost" onclick="editPrice('${p.packaging_size}', ${p.selling_price})">Change</button></div>`).join('');
+}
+
+function fruitForm(f = {}) {
+  return `<h2 class="font-headline-md text-headline-md mb-space-md">${f.fruit_id ? 'Edit fruit' : 'Add fruit'}</h2>
+  <form id="fruitForm" class="flex flex-col gap-space-md">
+    <div><label class="lbl">Fruit name</label><input class="field" name="fruit_name" value="${esc(f.fruit_name || '')}" required maxlength="60"></div>
+    <div><label class="lbl">Description</label><input class="field" name="description" value="${esc(f.description || '')}" maxlength="255"></div>
+    <div><label class="lbl">Category (optional)</label><input class="field" name="category" value="${esc(f.category || '')}" maxlength="60" placeholder="Leave blank for Uncategorized"><div class="text-body-sm text-on-surface-variant mt-space-xs">Fruits without a category appear under Uncategorized in Sales.</div></div>
+    <div><label class="lbl">Status</label><select class="field" name="status"><option ${f.status === 'ACTIVE' ? 'selected' : ''}>ACTIVE</option><option ${f.status === 'INACTIVE' ? 'selected' : ''}>INACTIVE</option></select></div>
+    <div class="flex gap-space-sm justify-end"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="btn" type="submit">Save</button></div>
+  </form>`;
+}
+
+function addFruit() {
+  const m = openModal(fruitForm());
+  $('#fruitForm', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (await attempt(() => api('POST', '/fruits', formData(e.target)), 'Fruit added')) { m.remove(); load(); }
+  });
+}
+function editFruit(id) {
+  const m = openModal(fruitForm(fruits.find((f) => f.fruit_id === id)));
+  $('#fruitForm', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    d.category = e.target.elements.category.value;
+    if (!d.description) delete d.description;
+    if (await attempt(() => api('PUT', `/fruits/${id}`, d), 'Fruit updated')) { m.remove(); load(); }
+  });
+}
+function editPrice(size, current) {
+  const m = openModal(`<h2 class="font-headline-md text-headline-md mb-space-md">${SIZE_LABEL[size]} box price</h2>
+    <form id="pf" class="flex flex-col gap-space-md"><div><label class="lbl">Selling price (M)</label><input class="field" type="number" step="0.01" min="0.01" name="selling_price" value="${current}" required></div>
+    <div class="flex gap-space-sm justify-end"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
+  $('#pf', m).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (await attempt(() => api('PUT', `/stock/prices/${size}`, formData(e.target)), 'Price updated')) { m.remove(); load(); }
+  });
+}
+
+boot('stock.html', 'SEC-B // VAULT', () => {
+  $('#app').innerHTML = pageHeader('[VAULT // STOCK BY PACKAGING SIZE]', 'Fruits & Stock Vault',
+    'Stock is tracked separately for small, medium and large boxes of every fruit. It rises with purchases and falls with sales. Each size shows AVAILABLE, LOW STOCK (100 boxes or fewer) or NOT AVAILABLE (0 boxes).',
+    '<button class="btn btn-alt" onclick="addFruit()">+ Add fruit</button>') +
+    `<section class="panel p-space-lg">${sectionTitle('Packaging prices (set by size, used automatically at the till)')}<div id="priceBox" class="grid grid-cols-1 md:grid-cols-3 gap-space-md"></div></section>
+    <section class="panel p-space-lg overflow-x-auto">${sectionTitle('Fruit catalogue, categories & available stock (boxes)')}
+      <table class="tbl"><thead><tr><th>ID</th><th>Fruit</th><th>Description</th><th>Category</th><th>Status</th><th class="num">Small</th><th class="num">Medium</th><th class="num">Large</th><th></th></tr></thead><tbody id="fruitRows"></tbody></table></section>`;
+  load();
+});
+</script>
+</body></html>

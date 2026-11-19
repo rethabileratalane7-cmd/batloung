@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>POS & Sales | Batloung Farm</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="js/tw-config.js"></script>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md">
+<main class="w-full pt-28"><div id="app" class="p-margin md:p-gutter-desktop flex flex-col gap-space-xl"></div></main>
+<script src="js/app.js"></script>
+<script>
+let vendors = [], fruits = [], stock = [], prices = [], sales = [], cart = [], vendorId = null, selectedFruitCategory = '';
+
+async function load() {
+  try {
+    const [v, f, s, p, sa] = await Promise.all([api('GET', '/vendors'), api('GET', '/fruits?status=ACTIVE'), api('GET', '/stock'), api('GET', '/stock/prices'), api('GET', '/sales')]);
+    vendors = v.data; fruits = f.data; stock = s.data; prices = p.data; sales = sa.data;
+  } catch (e) { toast(e.message, 'err'); return; }
+  if (!vendorId && vendors.length) vendorId = vendors[0].vendor_id;
+  render();
+}
+
+const price = (size) => (prices.find((p) => p.packaging_size === size) || {}).selling_price || 0;
+const avail = (fid, size) => (stock.find((r) => r.fruit_id === fid && r.packaging_size === size) || {}).available_quantity ?? 0;
+
+function render() {
+  $('#vendorSel').innerHTML = vendors.map((v) => `<option value="${v.vendor_id}" ${v.vendor_id === vendorId ? 'selected' : ''}>${esc(v.vendor_name)} — ${esc(v.phone_number)}</option>`).join('');
+  renderFruitCategories();
+  updateAvail();
+  renderCart();
+  $('#saleRows').innerHTML = sales.length ? sales.map((s) => `<tr><td>#${s.sale_id}</td><td>${esc(s.sale_date)}</td><td>${esc(s.vendor_name)}</td><td class="num">${num(s.total_boxes)}</td><td class="num">${money(s.total_amount)}</td><td class="num">${money(s.outstanding)}</td><td>${STATUS_CHIP[s.payment_status]}</td><td class="num"><button class="btn btn-ghost" onclick="viewSale(${s.sale_id})">View</button></td></tr>`).join('') : emptyRow(8);
+}
+
+function renderFruitCategories() {
+  const categories = [...new Set(fruits.map((f) => (f.category || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  if (selectedFruitCategory && !categories.includes(selectedFruitCategory)) selectedFruitCategory = '';
+  const groups = ['', ...categories];
+  $('#fruitCategories').innerHTML = groups.map((category) => {
+    const count = fruits.filter((f) => (f.category || '').trim() === category).length;
+    const label = category || 'Uncategorized';
+    const active = selectedFruitCategory === category;
+    return `<button type="button" class="category-tab${active ? ' is-selected' : ''}" data-category="${esc(category)}" aria-pressed="${active}">
+      <span>${esc(label)}</span><span class="category-tab-count">${count}</span></button>`;
+  }).join('');
+  $('#fruitCategories').querySelectorAll('[data-category]').forEach((button) => {
+    button.addEventListener('click', () => {
+      selectedFruitCategory = button.dataset.category;
+      renderFruitCategories();
+      updateFruitOptions();
+      updateAvail();
+    });
+  });
+  updateFruitOptions();
+}
+
+function updateFruitOptions() {
+  const groupFruits = fruits.filter((f) => (f.category || '').trim() === selectedFruitCategory);
+  $('#fruitSel').innerHTML = groupFruits.length
+    ? groupFruits.map((f) => `<option value="${f.fruit_id}">${esc(f.fruit_name)}</option>`).join('')
+    : '<option value="">No fruits in this category</option>';
+  $('#fruitSel').disabled = !groupFruits.length;
+  $('#addBtn').disabled = !groupFruits.length;
+}
+
+/** Stock check for a requested quantity: AVAILABLE / INSUFFICIENT / NOT AVAILABLE. */
+function stockCheck(fid, size, qty) {
+  if (!fid) return { ok: false, chip: '', text: 'Choose a fruit category with available items' };
+  if (size === 'LARGE' && qty > 8) return { ok: false, chip: '<span class="chip chip-low">MAX 8</span>', text: 'Large boxes are limited to 8 per fruit' };
+  const a = avail(fid, size);
+  if (a === 0) return { ok: false, chip: STOCK_CHIP.NOT_AVAILABLE, text: 'Not available: 0 boxes in stock' };
+  if (qty > a) return { ok: false, chip: '<span class="chip chip-low">INSUFFICIENT</span>', text: `Insufficient: requested ${num(qty)}, only ${num(a)} in stock` };
+  return { ok: true, chip: STOCK_CHIP.AVAILABLE, text: `Available: ${num(a)} boxes in stock` };
+}
+
+function updateAvail() {
+  const fid = Number($('#fruitSel').value), size = $('#sizeSel').value, qty = Number($('#qty').value) || 0;
+  $('#qty').max = size === 'LARGE' ? '8' : '';
+  $('#qtyHint').textContent = size === 'LARGE' ? 'Maximum 8 large boxes per fruit in a sale.' : 'Enter a whole-box quantity.';
+  const c = stockCheck(fid, size, qty);
+  $('#availTxt').innerHTML = `${c.chip} <span class="${c.ok ? 'text-on-surface-variant' : 'text-error'}">${esc(c.text)}</span> <span class="text-on-surface-variant">· ${money(price(size))} per box</span>`;
+  const lineTotal = Number.isInteger(qty) && qty > 0 ? qty * price(size) : 0;
+  $('#lineAmount').textContent = `${num(qty)} × ${money(price(size))} = ${money(lineTotal)}`;
+  $('#addBtn').disabled = !fid || (size === 'LARGE' && qty > 8);
+}
+
+function addToCart() {
+  const fid = Number($('#fruitSel').value), size = $('#sizeSel').value, qty = Number($('#qty').value);
+  if (!fid || !Number.isInteger(qty) || qty < 1) return toast('Choose a fruit and a whole-number quantity of at least 1', 'err');
+  const ex = cart.find((c) => c.fruit_id === fid && c.packaging_size === size);
+  if (size === 'LARGE' && (qty > 8 || (ex && ex.quantity + qty > 8))) {
+    return toast('Large boxes are limited to 8 per fruit in a sale.', 'err');
+  }
+  if (ex) ex.quantity += qty; else cart.push({ fruit_id: fid, packaging_size: size, quantity: qty });
+  renderCart();
+}
+
+function cartTotal() { return cart.reduce((t, c) => t + c.quantity * price(c.packaging_size), 0); }
+
+function renderCart() {
+  const name = (id) => (fruits.find((f) => f.fruit_id === id) || {}).fruit_name || id;
+  $('#cartRows').innerHTML = cart.length ? cart.map((c, i) => `<tr><td>${esc(name(c.fruit_id))}</td><td>${SIZE_LABEL[c.packaging_size]}</td><td class="num">${num(c.quantity)}<div>${stockCheck(c.fruit_id, c.packaging_size, c.quantity).chip}</div></td><td class="num">${money(price(c.packaging_size))}</td><td class="num">${money(c.quantity * price(c.packaging_size))}</td><td class="num"><button class="btn btn-ghost" onclick="cart.splice(${i},1);renderCart()">✕</button></td></tr>`).join('') : emptyRow(6, 'Cart is empty');
+  $('#total').textContent = money(cartTotal());
+  $('#amountRow').style.display = ['CASH', 'MOBILE_MONEY'].includes($('#method').value) ? '' : 'none';
+  if ($('#method').value !== 'CREDIT' && !$('#amount').dataset.touched) $('#amount').value = cartTotal().toFixed(2);
+  $('#checkout').disabled = !cart.length;
+  const bad = cart.filter((c) => !stockCheck(c.fruit_id, c.packaging_size, c.quantity).ok).length;
+  $('#stockWarn').style.display = bad ? '' : 'none';
+  updateAvail();
+}
+
+async function checkout() {
+  const body = { vendor_id: vendorId, items: cart };
+  const method = $('#method').value;
+  body.payment = { method };
+  if (method !== 'CREDIT') {
+    body.payment.amount = $('#amount').value;
+    if ($('#ref').value.trim()) body.payment.reference = $('#ref').value.trim();
+  }
+  const r = await attempt(() => api('POST', '/sales', body), 'Sale recorded, stock reduced');
+  if (r && r !== true) {
+    cart = []; $('#amount').dataset.touched = ''; await load();
+    viewSale(r.data.sale_id);
+  } else if (r === undefined) { await load(); } // refresh stock after a rejected sale
+}
+
+async function viewSale(id) {
+  const r = await attempt(() => api('GET', `/sales/${id}`));
+  if (!r || r === true) return;
+  const s = r.data;
+  openModal(`<h2 class="font-headline-md text-headline-md">Dispatch slip #${s.sale_id}</h2>
+    <div class="text-on-surface-variant mb-space-md">${esc(s.vendor_name)} · ${esc(s.sale_date)} · ${STATUS_CHIP[s.payment_status]}</div>
+    <table class="tbl"><thead><tr><th>Fruit</th><th>Size</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th></tr></thead><tbody>
+    ${s.items.map((i) => `<tr><td>${esc(i.fruit_name)}</td><td>${SIZE_LABEL[i.packaging_size]}</td><td class="num">${num(i.quantity)}</td><td class="num">${money(i.unit_price)}</td><td class="num">${money(i.line_total)}</td></tr>`).join('')}</tbody></table>
+    <div class="mt-space-md text-right font-mono-data-md text-mono-data-md">Total ${money(s.total_amount)}<br>Paid ${money(s.amount_paid)}<br><b>Outstanding ${money(s.outstanding)}</b></div>
+    ${s.payments.length ? `<div class="lbl mt-space-md">Payments</div>${s.payments.map((p) => `<div class="font-mono-data-md text-mono-data-md">${esc(p.paid_at)} · ${esc(p.method.replace('_', ' '))} · ${money(p.amount)}</div>`).join('')}` : ''}
+    <div class="text-right mt-space-md"><button class="btn btn-ghost" onclick="this.closest('.modal-bg').remove()">Close</button></div>`);
+}
+
+boot('pos.html', 'SEC-D // POS', () => {
+  $('#app').innerHTML = pageHeader('[SYS.REG // DESK-ALPHA]', 'Digital Register & POS',
+    'Select a vendor, add boxes by fruit and size. Prices come from the packaging price list and the total is calculated for you. A sale that asks for more boxes than exist is rejected entirely.') +
+    `<div class="grid grid-cols-1 xl:grid-cols-5 gap-space-lg">
+      <section class="panel p-space-lg xl:col-span-3 flex flex-col gap-space-md">
+        ${sectionTitle('01. Vendor')}<select id="vendorSel" class="field"></select>
+        ${sectionTitle('02. Add boxes')}
+        <div><div class="lbl">Fruit categories</div><div id="fruitCategories" class="category-tabs" role="group" aria-label="Filter fruits by category"></div></div>
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-space-sm items-end">
+          <div class="sm:col-span-2"><label class="lbl">Fruit</label><select id="fruitSel" class="field"></select></div>
+          <div><label class="lbl">Box size</label><select id="sizeSel" class="field"><option value="SMALL">Small</option><option value="MEDIUM" selected>Medium</option><option value="LARGE">Large</option></select></div>
+          <div><label class="lbl">Quantity</label><input id="qty" class="field" type="number" min="1" step="1" value="1"><div id="qtyHint" class="text-body-sm text-on-surface-variant mt-space-xs"></div></div>
+        </div>
+        <div class="bg-surface-container p-space-md flex flex-wrap items-center justify-between gap-space-sm"><div><div class="lbl">Estimated line amount</div><div id="lineAmount" class="font-mono-data-lg text-mono-data-lg" aria-live="polite">0 × M 0.00 = M 0.00</div></div><button class="btn btn-alt" id="addBtn">Add to cart</button></div>
+        <div id="availTxt" class="font-mono-label-sm text-mono-label-sm text-secondary"></div>
+      </section>
+      <section class="panel p-space-lg xl:col-span-2 flex flex-col gap-space-md">
+        ${sectionTitle('03. Cart & payment')}
+        <div class="overflow-x-auto"><table class="tbl"><thead><tr><th>Fruit</th><th>Size</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th></th></tr></thead><tbody id="cartRows"></tbody></table></div>
+        <div class="flex items-end justify-between bg-primary text-on-primary p-space-md"><span class="lbl !text-primary-fixed-dim !mb-0">Total due</span><span id="total" class="font-mono-data-lg text-mono-data-lg">M 0.00</span></div>
+        <div class="grid grid-cols-2 gap-space-sm">
+          <div><label class="lbl">Payment method</label><select id="method" class="field"><option value="CASH">Cash</option><option value="MOBILE_MONEY">Mobile money</option><option value="CREDIT">Credit (pay later)</option></select></div>
+          <div id="amountRow"><label class="lbl">Amount paid now</label><input id="amount" class="field" type="number" min="0.01" step="0.01"></div>
+          <div class="col-span-2"><label class="lbl">Reference (optional)</label><input id="ref" class="field" maxlength="60"></div>
+        </div>
+        <div id="stockWarn" style="display:none" class="bg-error-container text-on-error-container p-space-sm font-mono-label-sm text-mono-label-sm">SOME ITEMS EXCEED AVAILABLE STOCK. THE SERVER WILL REJECT THE WHOLE SALE AND CHANGE NOTHING.</div>
+        <button id="checkout" class="btn btn-alt" disabled>Complete sale</button>
+      </section></div>
+    <section class="panel p-space-lg overflow-x-auto">${sectionTitle('Recent sales')}<table class="tbl"><thead><tr><th>Ref</th><th>Date</th><th>Vendor</th><th class="num">Boxes</th><th class="num">Total</th><th class="num">Outstanding</th><th>Status</th><th></th></tr></thead><tbody id="saleRows"></tbody></table></section>`;
+  $('#vendorSel').addEventListener('change', (e) => { vendorId = Number(e.target.value); });
+  $('#fruitSel').addEventListener('change', updateAvail);
+  $('#sizeSel').addEventListener('change', updateAvail);
+  $('#qty').addEventListener('input', updateAvail);
+  $('#addBtn').addEventListener('click', addToCart);
+  $('#method').addEventListener('change', renderCart);
+  $('#amount').addEventListener('input', (e) => { e.target.dataset.touched = '1'; });
+  $('#checkout').addEventListener('click', checkout);
+  load();
+});
+</script>
+</body></html>
